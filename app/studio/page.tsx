@@ -21,11 +21,13 @@ import {
   AlertCircle,
   AlertTriangle,
   RotateCcw,
+  Plus,
 } from "lucide-react";
 import Link from "next/link";
 import SlideshowPlayer from "../components/SlideshowPlayer";
 import GraphicNovelSpreadModal from "../components/GraphicNovelSpreadModal";
 import ScriptImportModal from "../components/ScriptImportModal";
+import NewStoryModal from "../components/NewStoryModal";
 import {
   ProjectData,
   Character,
@@ -285,7 +287,87 @@ export default function StudioPage() {
   const [showSlideshow, setShowSlideshow] = useState(false);
   const [showBookSpread, setShowBookSpread] = useState(false);
   const [showScriptImport, setShowScriptImport] = useState(false);
+  const [showNewStoryModal, setShowNewStoryModal] = useState(false);
   const [editingPanel, setEditingPanel] = useState<SlidePanel | null>(null);
+
+  // Callback when a new story with storyline-based characters is created
+  const handleStoryCreated = useCallback(
+    (
+      newProject: ProjectData,
+      newCharacters: Character[],
+      openingBeat?: {
+        title: string;
+        description: string;
+        caption: string;
+        dialogue?: string;
+      }
+    ) => {
+      setSelectedPresetId("custom");
+      setProject(newProject);
+      setCharacters(newCharacters);
+
+      const customChips = [
+        `Establish the opening scene of ${newProject.title}`,
+        newCharacters[0] ? `Focus on ${newCharacters[0].name}: ${newCharacters[0].role}` : "Introduce the protagonist",
+        "Dynamic action framing of the initial conflict",
+        "Atmospheric wide angle highlighting the environment",
+      ];
+      setPromptChips(customChips);
+
+      const initialPanel: SlidePanel = openingBeat
+        ? {
+            id: getUniqueId("panel"),
+            title: `Panel 1: ${openingBeat.title}`,
+            description: openingBeat.description,
+            image: generateInitialSvg(openingBeat.title, openingBeat.description, 1),
+            caption: openingBeat.caption,
+            dialogue: openingBeat.dialogue,
+            source: "development-fallback",
+          }
+        : {
+            id: getUniqueId("panel"),
+            title: `Panel 1: The Beginning`,
+            description: `Opening scene establishing the world of ${newProject.title}.`,
+            image: generateInitialSvg(newProject.title, newProject.idea, 1),
+            caption: newProject.idea.slice(0, 140),
+            source: "development-fallback",
+          };
+
+      const newPanelsList = [initialPanel];
+      setPanels(newPanelsList);
+
+      try {
+        sessionStorage.setItem("vizzy-project", JSON.stringify(newProject));
+        sessionStorage.setItem("vizzy-characters", JSON.stringify(newCharacters));
+        sessionStorage.setItem("vizzy-panels", JSON.stringify(newPanelsList));
+      } catch (e) {
+        console.warn("Storage notice on story creation:", e);
+      }
+
+      const castSummary =
+        newCharacters.length > 0
+          ? newCharacters.map((c) => `**${c.name}** (${c.role})`).join(", ")
+          : "None assigned yet";
+
+      const welcomeMsg: ChatMessage = {
+        id: getUniqueId("msg_new_story"),
+        sender: "vizzy",
+        timestamp: getNowTimeString(),
+        text: `🎬 **Welcome to your new story: "${newProject.title}"** (${newProject.storyType})!
+
+📜 **Premise / Storyline**: "${newProject.idea}"  
+🎨 **Palette Emphasis**: ${newProject.colorEmphasis || "Custom"}  
+👥 **Cast**: ${castSummary}
+
+I've initialized **Panel 1: ${initialPanel.title.replace(/^Panel 1:\s*/, "")}**.
+
+What dramatic moment should we compose first? You can request framing variations below or describe what happens next!`,
+      };
+
+      setMessages([welcomeMsg]);
+    },
+    []
+  );
 
   const chatBottomRef = useRef<HTMLDivElement>(null);
   const activeAbortController = useRef<AbortController | null>(null);
@@ -783,6 +865,11 @@ Your story timeline has been updated with these scene beats. You can now generat
                 isDark ? "text-zinc-200" : "text-zinc-800"
               }`}
             >
+              {selectedPresetId === "custom" && (
+                <option value="custom" className="bg-[#100e1a] text-purple-300">
+                  ★ Custom: {project.title}
+                </option>
+              )}
               {storyPresets.map((preset) => (
                 <option key={preset.id} value={preset.id} className="bg-[#100e1a] text-white">
                   {preset.title}
@@ -790,6 +877,16 @@ Your story timeline has been updated with these scene beats. You can now generat
               ))}
             </select>
           </div>
+
+          {/* New Story Action Button */}
+          <button
+            onClick={() => setShowNewStoryModal(true)}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-purple-600 hover:bg-purple-500 text-white text-xs font-bold shadow-md shadow-purple-900/30 transition cursor-pointer"
+            title="Create a new story with custom storyline and AI cast"
+          >
+            <Plus size={13} />
+            <span className="hidden sm:inline">New Story</span>
+          </button>
         </div>
 
         <div className="flex items-center gap-2.5">
@@ -922,13 +1019,22 @@ Your story timeline has been updated with these scene beats. You can now generat
           </div>
 
           <div>
-            <p
-              className={`text-[10px] font-mono font-bold tracking-widest uppercase mb-3 ${
-                isDark ? "text-purple-400" : "text-purple-700"
-              }`}
-            >
-              STORY BIBLE
-            </p>
+            <div className="flex items-center justify-between mb-3">
+              <p
+                className={`text-[10px] font-mono font-bold tracking-widest uppercase ${
+                  isDark ? "text-purple-400" : "text-purple-700"
+                }`}
+              >
+                STORY BIBLE
+              </p>
+              <button
+                onClick={() => setShowNewStoryModal(true)}
+                className="text-[10px] font-bold text-purple-600 dark:text-purple-400 hover:underline flex items-center gap-1 cursor-pointer"
+                title="Create a new story with custom storyline and AI cast"
+              >
+                <Plus size={11} /> New Story
+              </button>
+            </div>
 
             <div
               className={`space-y-3 rounded-2xl p-4 border transition-colors backdrop-blur-sm ${
@@ -1547,6 +1653,14 @@ Your story timeline has been updated with these scene beats. You can now generat
         isOpen={showScriptImport}
         onClose={() => setShowScriptImport(false)}
         onImport={handleImportPanels}
+      />
+
+      {/* NEW STORY CREATION MODAL */}
+      <NewStoryModal
+        isOpen={showNewStoryModal}
+        onClose={() => setShowNewStoryModal(false)}
+        onStoryCreated={handleStoryCreated}
+        isDark={isDark}
       />
 
       {/* EDIT PANEL MODAL */}

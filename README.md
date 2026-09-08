@@ -8,6 +8,7 @@ Vizzy is an interactive web application that transforms screenplays, story treat
 ## 🌟 Key Features
 
 - **Collaborative AI Director**: Direct scene-by-scene with Vizzy in real-time chat. Propose visual ideas, dial in atmosphere, and explore story directions.
+- **Storyline Setup & AI Cast Generator**: Create new custom stories with your own title, synopsis, genre, and palette. Gemini 2.5 Flash analyzes your storyline to automatically generate 2 to 4 key cast members fitted to the narrative.
 - **Three-Angle Framing Engine**: For every scene beat, Vizzy generates 3 framing candidate variations (Wide Shot, Dynamic Action, and Close-up/Intimate). Inspect candidates, refine prompts directly in chat, and lock your chosen take into the timeline.
 - **Character Cast Studio**: Develop your story's cast with visual reference portraits. Character descriptions and reference details are incorporated into scene prompts to encourage visual consistency across panels.
 - **Screenplay & Script Parser**: Paste raw screenplay text, scene outlines, or film notes. Vizzy utilizes Gemini 2.5 Flash to automatically detect scenes, extract dramatic actions, dialogue, captions, and camera angles into an ordered sequence.

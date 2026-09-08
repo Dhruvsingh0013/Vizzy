@@ -15,20 +15,8 @@ import {
   Loader2,
 } from "lucide-react";
 import { useRouter } from "next/navigation";
-
-type Character = {
-  id: string;
-  name: string;
-  role: string;
-  description: string;
-  image?: string;
-};
-
-type ProjectData = {
-  title: string;
-  storyType: string;
-  idea: string;
-};
+import { Character, ProjectData } from "@/types";
+import NewStoryModal from "../components/NewStoryModal";
 
 const roles = [
   "Protagonist",
@@ -50,10 +38,51 @@ export default function CharactersPage() {
 
   const [editingId, setEditingId] = useState<string | null>(null);
   const [showCreator, setShowCreator] = useState(false);
+  const [showNewStoryModal, setShowNewStoryModal] = useState(false);
 
   const [generatedImage, setGeneratedImage] = useState("");
   const [isGenerating, setIsGenerating] = useState(false);
   const [error, setError] = useState("");
+
+  const handleStoryCreated = (
+    newProject: ProjectData,
+    newCharacters: Character[],
+    openingBeat?: {
+      title: string;
+      description: string;
+      caption: string;
+      dialogue?: string;
+    }
+  ) => {
+    setProject(newProject);
+    setCharacters(newCharacters);
+
+    try {
+      sessionStorage.setItem("vizzy-project", JSON.stringify(newProject));
+      sessionStorage.setItem("vizzy-characters", JSON.stringify(newCharacters));
+
+      const initialPanel = openingBeat
+        ? {
+            id: `panel_${Date.now()}_1`,
+            title: `Panel 1: ${openingBeat.title}`,
+            description: openingBeat.description,
+            caption: openingBeat.caption,
+            dialogue: openingBeat.dialogue,
+            source: "development-fallback" as const,
+          }
+        : {
+            id: `panel_${Date.now()}_1`,
+            title: "Panel 1: The Beginning",
+            description: `Opening scene establishing ${newProject.title}.`,
+            caption: newProject.idea.slice(0, 140),
+            source: "development-fallback" as const,
+          };
+
+      sessionStorage.setItem("vizzy-panels", JSON.stringify([initialPanel]));
+    } catch (e) {
+      console.warn("Storage write error:", e);
+    }
+  };
 
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -256,8 +285,17 @@ export default function CharactersPage() {
           </span>
         </div>
 
-        <div className="text-xs text-white/30 tracking-widest uppercase">
-          Character Studio
+        <div className="flex items-center gap-3">
+          <button
+            onClick={() => setShowNewStoryModal(true)}
+            className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-full bg-purple-600 hover:bg-purple-500 text-white text-xs font-bold transition shadow-lg shadow-purple-950/50 cursor-pointer"
+            title="Create a new story and auto-generate characters"
+          >
+            <Plus size={13} /> New Story
+          </button>
+          <div className="text-xs text-white/30 tracking-widest uppercase hidden sm:block">
+            Character Studio
+          </div>
         </div>
       </header>
 
@@ -283,12 +321,29 @@ export default function CharactersPage() {
             Create the characters who will inhabit your world. Character reference descriptions are incorporated into scene prompts to encourage visual consistency across your story panels.
           </p>
 
-          {project && (
-            <div className="mt-6 text-sm text-white/30">
-              Building characters for{" "}
-              <span className="text-white/60">{project.title}</span>
-            </div>
-          )}
+          <div className="mt-6 flex flex-wrap items-center gap-3 text-sm text-white/40">
+            {project ? (
+              <>
+                <span>
+                  Building cast for <strong className="text-white/80">{project.title}</strong> ({project.storyType})
+                </span>
+                <span className="text-white/20">•</span>
+                <button
+                  onClick={() => setShowNewStoryModal(true)}
+                  className="text-purple-300 hover:text-purple-200 font-bold text-xs underline cursor-pointer"
+                >
+                  Change / New Story
+                </button>
+              </>
+            ) : (
+              <button
+                onClick={() => setShowNewStoryModal(true)}
+                className="text-purple-300 hover:text-purple-200 font-bold text-xs underline cursor-pointer"
+              >
+                + Set Up Story & Auto-Cast Characters
+              </button>
+            )}
+          </div>
         </motion.div>
 
         {/* Characters */}
@@ -647,6 +702,14 @@ export default function CharactersPage() {
           </motion.div>
         )}
       </AnimatePresence>
+
+      {/* New Story Modal */}
+      <NewStoryModal
+        isOpen={showNewStoryModal}
+        onClose={() => setShowNewStoryModal(false)}
+        onStoryCreated={handleStoryCreated}
+        isDark={true}
+      />
     </main>
-  )
+  );
 }

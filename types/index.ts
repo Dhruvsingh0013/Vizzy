@@ -75,3 +75,24 @@ export interface ParseScriptResponse {
   parsedBy: "gemini" | "heuristic";
   error?: string;
 }
+
+export interface GenerateCastRequest {
+  title: string;
+  storyline: string;
+  storyType?: string;
+  colorEmphasis?: string;
+}
+
+export interface GenerateCastResponse {
+  success: boolean;
+  characters: Character[];
+  openingSceneBeat?: {
+    title: string;
+    description: string;
+    caption: string;
+    dialogue?: string;
+  };
+  parsedBy: "gemini" | "heuristic";
+  error?: string;
+}
+
