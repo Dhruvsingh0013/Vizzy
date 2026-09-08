@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   Play,
@@ -12,20 +12,14 @@ import {
   ChevronLeft,
   ChevronRight,
   Sparkles,
-  Download,
+  Printer,
   Volume2,
   VolumeX,
-  Sliders,
+  SlidersHorizontal,
 } from "lucide-react";
+import { SlidePanel } from "@/types";
 
-export type SlidePanel = {
-  id: string;
-  title: string;
-  description: string;
-  image?: string;
-  caption?: string;
-  dialogue?: string;
-};
+export type { SlidePanel };
 
 interface SlideshowPlayerProps {
   isOpen: boolean;
@@ -54,12 +48,13 @@ export default function SlideshowPlayer({
   const audioCtxRef = useRef<AudioContext | null>(null);
 
   // Synthesize subtle cinematic sound on slide change using Web Audio API
-  const playSlideTransitionSound = () => {
+  const playSlideTransitionSound = useCallback(() => {
     if (!soundEnabled) return;
 
     try {
       if (!audioCtxRef.current) {
-        audioCtxRef.current = new (window.AudioContext || (window as any).webkitAudioContext)();
+        const AudioCtor = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+        audioCtxRef.current = new AudioCtor();
       }
       const ctx = audioCtxRef.current;
       if (ctx.state === "suspended") ctx.resume();
@@ -80,10 +75,10 @@ export default function SlideshowPlayer({
 
       osc.start();
       osc.stop(ctx.currentTime + 0.35);
-    } catch (e) {
+    } catch {
       // Audio context might be restricted
     }
-  };
+  }, [soundEnabled]);
 
   // Auto-run loop timer
   useEffect(() => {
@@ -98,7 +93,7 @@ export default function SlideshowPlayer({
     }, speed * 1000);
 
     return () => clearInterval(timer);
-  }, [isOpen, isPlaying, speed, isLooping, panels.length, soundEnabled]);
+  }, [isOpen, isPlaying, speed, isLooping, panels.length, playSlideTransitionSound]);
 
   // Keyboard navigation
   useEffect(() => {
@@ -122,7 +117,7 @@ export default function SlideshowPlayer({
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [isOpen, onClose, panels.length, soundEnabled]);
+  }, [isOpen, onClose, panels.length, playSlideTransitionSound]);
 
   const toggleFullscreen = () => {
     if (!containerRef.current) return;
@@ -202,7 +197,7 @@ export default function SlideshowPlayer({
               }`}
               title="Toggle Ken Burns Movement"
             >
-              <Sliders size={15} />
+              <SlidersHorizontal size={15} />
             </button>
 
             {/* Loop Toggle */}
@@ -252,7 +247,11 @@ export default function SlideshowPlayer({
               {currentPanel.image ? (
                 <motion.img
                   src={currentPanel.image}
-                  alt={currentPanel.title}
+                  alt={`Artwork for ${currentPanel.title || `Panel ${currentIndex + 1}`}`}
+                  onError={(e) => {
+                    const target = e.currentTarget;
+                    target.style.display = "none";
+                  }}
                   animate={
                     kenBurnsEnabled
                       ? {
@@ -376,7 +375,7 @@ export default function SlideshowPlayer({
             onClick={() => window.print()}
             className="flex items-center gap-2 px-4 py-2 rounded-xl bg-white/10 hover:bg-white/20 border border-white/10 text-xs font-bold text-white transition cursor-pointer"
           >
-            <Download size={14} /> Export Sequence
+            <Printer size={14} /> Print / Save as PDF
           </button>
         </div>
       </motion.div>

@@ -1,15 +1,15 @@
 "use client";
 
-import React from "react";
-import { motion, AnimatePresence } from "framer-motion";
-import { X, Printer, BookOpen, Sparkles, Download } from "lucide-react";
-import { SlidePanel } from "./SlideshowPlayer";
+import { AnimatePresence } from "framer-motion";
+import { X, Printer, BookOpen } from "lucide-react";
+import { SlidePanel } from "@/types";
 
 interface GraphicNovelSpreadProps {
   isOpen: boolean;
   onClose: () => void;
   storyTitle: string;
-  storyType: string;
+  storyType?: string;
+  storyStyle?: string;
   worldSetting?: string;
   panels: SlidePanel[];
 }
@@ -19,6 +19,7 @@ export default function GraphicNovelSpreadModal({
   onClose,
   storyTitle,
   storyType,
+  storyStyle,
   worldSetting,
   panels,
 }: GraphicNovelSpreadProps) {
@@ -28,9 +29,11 @@ export default function GraphicNovelSpreadModal({
     window.print();
   };
 
+  const effectiveType = storyType || storyStyle || "Graphic Novel";
+
   return (
     <AnimatePresence>
-      <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-xl flex flex-col justify-between overflow-y-auto print:bg-white print:text-black">
+      <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-xl flex flex-col justify-between overflow-y-auto print:bg-white print:text-black print:overflow-visible">
         {/* HEADER BAR (Hidden on print) */}
         <div className="sticky top-0 z-30 flex items-center justify-between px-6 py-4 bg-[#0a0814]/90 border-b border-white/10 backdrop-blur-md print:hidden">
           <div className="flex items-center gap-3">
@@ -40,7 +43,7 @@ export default function GraphicNovelSpreadModal({
             <div>
               <h2 className="text-sm font-bold text-white tracking-wide">{storyTitle}</h2>
               <p className="text-[10px] text-purple-300 font-mono uppercase tracking-wider">
-                {storyType} • PRINTABLE GRAPHIC NOVEL SPREAD ({panels.length} PANELS)
+                {effectiveType} • PRINTABLE GRAPHIC NOVEL LAYOUT ({panels.length} PANELS)
               </p>
             </div>
           </div>
@@ -63,10 +66,10 @@ export default function GraphicNovelSpreadModal({
         </div>
 
         {/* PRINTABLE COMIC BOOK SPREAD CONTAINER */}
-        <div className="flex-1 max-w-5xl mx-auto w-full p-6 md:p-12 print:p-0 print:max-w-none">
-          <div className="bg-[#12111a] border border-white/10 rounded-3xl p-8 md:p-12 shadow-2xl print:bg-white print:border-none print:shadow-none print:p-4">
+        <div className="flex-1 p-6 md:p-12 max-w-6xl mx-auto w-full print:p-0 print:max-w-none print:w-full">
+          <div className="bg-[#0f0d1a] border-2 border-white/10 rounded-3xl p-8 md:p-12 shadow-2xl print:border-none print:shadow-none print:bg-white print:p-0">
             
-            {/* NOVEL COVER HEADER */}
+            {/* SPREAD TITLE HEADER */}
             <div className="text-center border-b-2 border-white/10 pb-8 mb-10 print:border-black print:pb-4 print:mb-6">
               <span className="text-xs font-mono font-bold tracking-[0.3em] text-purple-400 uppercase print:text-black">
                 VIZZY VISUAL CHRONICLES
@@ -82,25 +85,30 @@ export default function GraphicNovelSpreadModal({
             </div>
 
             {/* SEQUENTIAL PANELS GRID (Classic 2-column comic layout) */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-8 print:grid-cols-2 print:gap-6">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-8 print:grid-cols-2 print:gap-6 print:block">
               {panels.map((panel, idx) => (
                 <div
                   key={panel.id || idx}
-                  className="rounded-2xl border-2 border-white/15 bg-black/50 overflow-hidden flex flex-col justify-between shadow-xl print:border-black print:bg-white print:break-inside-avoid"
+                  className="rounded-2xl border-2 border-white/15 bg-black/50 overflow-hidden flex flex-col justify-between shadow-xl print:border-black print:bg-white print:mb-6 print:break-inside-avoid print:page-break-inside-avoid"
+                  style={{ breakInside: "avoid", pageBreakInside: "avoid" }}
                 >
                   {/* Aspect-Ratio Panel Frame */}
-                  <div className="aspect-[16/10] relative overflow-hidden bg-zinc-950">
+                  <div className="aspect-[16/10] relative overflow-hidden bg-zinc-950 print:bg-zinc-100">
                     {panel.image && (
                       <img
                         src={panel.image}
-                        alt={panel.title}
-                        className="w-full h-full object-cover"
+                        alt={`Generated artwork for ${panel.title || `Panel ${idx + 1}`}`}
+                        className="w-full h-full object-cover print:max-h-[350px]"
+                        onError={(e) => {
+                          const target = e.currentTarget;
+                          target.style.display = "none";
+                        }}
                       />
                     )}
 
                     {/* Speech Bubble Overlay if present */}
                     {panel.dialogue && (
-                      <div className="speech-bubble absolute top-4 right-4 text-xs max-w-[170px] shadow-lg print:border-black">
+                      <div className="speech-bubble absolute top-4 right-4 text-xs max-w-[170px] shadow-lg print:border-black print:bg-white">
                         {panel.dialogue}
                       </div>
                     )}
@@ -126,8 +134,8 @@ export default function GraphicNovelSpreadModal({
 
             {/* SPREAD FOOTER */}
             <div className="mt-12 pt-6 border-t border-white/10 flex items-center justify-between text-[10px] text-zinc-500 font-mono print:border-black print:text-black">
-              <span>CREATED WITH VIZZY AI COLLABORATIVE STUDIO</span>
-              <span>PAGE 1 OF 1</span>
+              <span>CREATED WITH VIZZY • AI-POWERED STORYBOARD CREATOR</span>
+              <span>STORYBOARD • {panels.length} {panels.length === 1 ? "PANEL" : "PANELS"}</span>
             </div>
 
           </div>

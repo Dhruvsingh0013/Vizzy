@@ -2,8 +2,9 @@
 
 import React, { useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { X, FileText, Sparkles, Loader2, ArrowRight } from "lucide-react";
-import { SlidePanel } from "./SlideshowPlayer";
+import { X, FileText, Sparkles, Loader2, AlertCircle } from "lucide-react";
+import { SlidePanel, ParseScriptResponse } from "@/types";
+import { postJson } from "@/lib/api";
 
 interface ScriptImportModalProps {
   isOpen: boolean;
@@ -18,6 +19,7 @@ export default function ScriptImportModal({
 }: ScriptImportModalProps) {
   const [scriptText, setScriptText] = useState("");
   const [isParsing, setIsParsing] = useState(false);
+  const [parseError, setParseError] = useState<string | null>(null);
 
   if (!isOpen) return null;
 
@@ -25,37 +27,33 @@ export default function ScriptImportModal({
     if (!scriptText.trim()) return;
 
     setIsParsing(true);
+    setParseError(null);
 
     try {
-      // Split script text into scene segments (by numbered lines, 'SCENE', or double newlines)
-      const segments = scriptText
-        .split(/(?:SCENE \d+:?|\n\n|\d+\.\s+)/i)
-        .map((s) => s.trim())
-        .filter((s) => s.length > 15);
+      const data = await postJson<ParseScriptResponse>("/api/parse-script", {
+        scriptText,
+      });
 
-      const parsed: SlidePanel[] = (segments.length > 0 ? segments : [scriptText.trim()]).map(
-        (segment, idx) => {
-          const lines = segment.split("\n").map((l) => l.trim()).filter(Boolean);
-          const title = lines[0]?.slice(0, 40) || `Scene ${idx + 1}`;
-          const description = segment;
-          const dialogueMatch = segment.match(/["'](.*?)["']/);
-          const dialogue = dialogueMatch ? dialogueMatch[1] : undefined;
+      if (!data.beats || data.beats.length === 0) {
+        throw new Error("No dramatic scene beats could be extracted.");
+      }
 
-          return {
-            id: `imported_panel_${Date.now()}_${idx}`,
-            title: `Panel ${idx + 1}: ${title}`,
-            description,
-            caption: lines.length > 1 ? lines[1] : description.slice(0, 80),
-            dialogue,
-            image: generateImportedSvg(title, idx + 1),
-          };
-        }
-      );
+      const timestamp = Date.now();
+      const parsed: SlidePanel[] = data.beats.map((beat, idx) => ({
+        id: `panel_import_${timestamp}_${idx}`,
+        title: beat.title || `Panel ${idx + 1}`,
+        description: beat.description,
+        caption: beat.caption || beat.description.slice(0, 120),
+        dialogue: beat.dialogue || undefined,
+        source: "development-fallback",
+        image: generateImportedSvg(beat.title, idx + 1),
+      }));
 
       onImport(parsed);
       onClose();
     } catch (e) {
-      console.error(e);
+      console.warn("Script parsing warning:", e instanceof Error ? e.message : "");
+      setParseError(e instanceof Error ? e.message : "Failed to parse script text. Please try again.");
     } finally {
       setIsParsing(false);
     }
@@ -73,6 +71,7 @@ Pinned beneath the gravel embankment under mortar fire. Private Jackson spots an
 
 SCENE 4: SCALING POINTE DU HOC
 Rangers firing grappling hooks up the 100-foot vertical limestone cliffs. Soldiers pulling themselves up ropes through artillery smoke to neutralize the heavy artillery battery.`);
+    setParseError(null);
   };
 
   return (
@@ -92,7 +91,7 @@ Rangers firing grappling hooks up the 100-foot vertical limestone cliffs. Soldie
               <div>
                 <h3 className="text-sm font-bold text-white">Import Script / Story Notes</h3>
                 <p className="text-[10px] text-zinc-400">
-                  Paste your full screenplay or scene notes to automatically create panels
+                  Parses scene beats, character dialogues, and camera cues into ordered panels
                 </p>
               </div>
             </div>
@@ -102,49 +101,56 @@ Rangers firing grappling hooks up the 100-foot vertical limestone cliffs. Soldie
             </button>
           </div>
 
-          <div>
-            <div className="flex justify-between items-center mb-1.5">
-              <label className="text-[10px] font-bold text-purple-300 uppercase">
+          <div className="space-y-3">
+            <div className="flex items-center justify-between text-xs">
+              <span className="font-bold text-zinc-300">
                 Raw Script / Story Outline
-              </label>
+              </span>
               <button
                 type="button"
                 onClick={loadExampleScript}
-                className="text-[10px] text-purple-400 hover:text-purple-300 font-bold underline cursor-pointer"
+                className="text-[11px] text-purple-400 hover:text-purple-300 underline font-bold cursor-pointer"
               >
                 Load D-Day Sample Script
               </button>
             </div>
 
             <textarea
+              rows={8}
               value={scriptText}
               onChange={(e) => setScriptText(e.target.value)}
-              placeholder="Paste your screenplay, book chapters, or numbered scene notes here..."
-              rows={8}
-              className="w-full bg-white/5 border border-white/10 rounded-xl p-3.5 text-xs text-zinc-100 placeholder:text-zinc-600 focus:outline-none focus:border-purple-500/50 resize-none leading-relaxed"
+              placeholder={`Paste script or scene notes here...\n\nExample:\nSCENE 1: THE APPROACH\nCaptain Miller stands at the bow of the Higgins boat, dawn fog settling over the water. "Check your ammo!"\n\nSCENE 2: UNDER FIRE\nMortars explode along the waterline as the ramp falls.`}
+              className="w-full rounded-xl bg-black/40 border border-white/10 p-3.5 text-xs text-zinc-200 placeholder-zinc-500 font-mono outline-none focus:border-purple-500/50 transition resize-none leading-relaxed"
             />
+
+            {parseError && (
+              <div className="flex items-center gap-2 p-2.5 rounded-lg bg-red-950/40 border border-red-500/30 text-xs text-red-300">
+                <AlertCircle size={14} className="shrink-0" />
+                <span>{parseError}</span>
+              </div>
+            )}
           </div>
 
-          <div className="flex items-center justify-between pt-3 border-t border-white/10">
-            <span className="text-[10px] text-zinc-500">
-              Vizzy will extract characters, action, dialogue, and camera beats.
+          <div className="flex items-center justify-between pt-2 border-t border-white/10">
+            <span className="text-[10px] text-zinc-400 font-mono">
+              Creates placeholder panels ready for AI image generation
             </span>
 
             <div className="flex gap-2">
               <button
                 onClick={onClose}
-                className="px-4 py-2 rounded-xl text-xs text-zinc-400 hover:text-white"
+                className="px-4 py-2 rounded-xl bg-white/5 hover:bg-white/10 text-xs font-bold transition cursor-pointer"
               >
                 Cancel
               </button>
               <button
                 onClick={handleParseScript}
                 disabled={!scriptText.trim() || isParsing}
-                className="flex items-center gap-2 px-5 py-2 rounded-xl bg-purple-600 hover:bg-purple-500 disabled:opacity-40 text-white font-bold text-xs shadow-lg transition cursor-pointer"
+                className="flex items-center gap-2 px-5 py-2 rounded-xl bg-purple-600 hover:bg-purple-500 disabled:opacity-40 text-xs font-bold transition shadow-lg cursor-pointer"
               >
                 {isParsing ? (
                   <>
-                    <Loader2 size={14} className="animate-spin" /> Extracting Panels...
+                    <Loader2 size={14} className="animate-spin" /> Analyzing Script...
                   </>
                 ) : (
                   <>
@@ -176,8 +182,14 @@ function generateImportedSvg(title: string, index: number): string {
       <rect width="1600" height="900" fill="url(#imp_sky_${index})" />
       <rect y="560" width="1600" height="340" fill="#040308" />
       <circle cx="800" cy="480" r="35" fill="#120f26" />
-      <text x="80" y="780" fill="#ffffff" font-family="sans-serif" font-size="40" font-weight="bold">${title}</text>
-      <text x="80" y="830" fill="#a78bfa" font-family="sans-serif" font-size="18">SCENE PANEL ${index} • READY FOR ART GENERATION</text>
+      
+      <rect x="60" y="60" width="460" height="36" rx="8" fill="#000000" fill-opacity="0.8" stroke="#a78bfa" stroke-width="1.5" />
+      <text x="80" y="83" fill="#c4b5fd" font-family="sans-serif" font-size="13" font-weight="bold">
+        SCRIPT BEAT 0${index} • DEVELOPMENT PREVIEW
+      </text>
+
+      <text x="80" y="780" fill="#ffffff" font-family="sans-serif" font-size="36" font-weight="bold">${title}</text>
+      <text x="80" y="830" fill="#a78bfa" font-family="sans-serif" font-size="16">READY FOR CANDIDATE SCENE GENERATION IN CHAT</text>
     </svg>
   `;
   return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;

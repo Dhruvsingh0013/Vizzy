@@ -1,5 +1,6 @@
 import { GoogleGenAI } from "@google/genai";
 import { NextResponse } from "next/server";
+import { Character, PanelCandidate } from "@/types";
 
 function escapeXml(value: string) {
   return value
@@ -13,35 +14,89 @@ function escapeXml(value: string) {
 export async function POST(request: Request) {
   try {
     const body = await request.json();
-    const { prompt, sceneId, sceneTitle, characters, colorEmphasis, style } = body;
+    const {
+      prompt,
+      sceneId,
+      sceneTitle,
+      characters,
+      colorEmphasis,
+      style,
+      refinementPrompt,
+      baseDescription,
+    } = body;
 
-    if (!prompt?.trim()) {
+    if (!prompt || typeof prompt !== "string" || !prompt.trim()) {
       return NextResponse.json(
         { success: false, error: "Scene prompt is required." },
         { status: 400 }
       );
     }
 
-    const apiKey = process.env.GEMINI_API_KEY;
+    if (prompt.length > 2000) {
+      return NextResponse.json(
+        { success: false, error: "Prompt exceeds maximum allowed length (2000 characters)." },
+        { status: 400 }
+      );
+    }
 
-    let options: Array<{ id: string; image: string; label: string; description: string }> = [];
+    const safeTitle = typeof sceneTitle === "string" ? sceneTitle.slice(0, 200) : "Scene";
+    const safeStyle = typeof style === "string" ? style.slice(0, 100) : "Graphic Novel";
+    const safeColor = typeof colorEmphasis === "string" ? colorEmphasis.slice(0, 200) : "Muted tones";
+
+    // Build character context for visual consistency
+    let characterContext = "";
+    if (Array.isArray(characters) && characters.length > 0) {
+      const charDescriptions = (characters as Character[])
+        .slice(0, 6)
+        .filter((c) => c && c.name)
+        .map((c) => `${c.name} (${c.role}): ${c.description || "Distinctive appearance"}`)
+        .join("; ");
+      if (charDescriptions) {
+        characterContext = ` Key character reference descriptions to incorporate for visual continuity: ${charDescriptions}.`;
+      }
+    }
+
+    // Handle refinement
+    let sceneDescription = prompt.trim();
+    if (refinementPrompt && typeof refinementPrompt === "string") {
+      const base = baseDescription || prompt;
+      sceneDescription = `Refinement of previous scene [${base.slice(0, 400)}]. Modification: ${refinementPrompt.slice(0, 500)}. Maintain visual style, character identities, and key lighting while applying the requested change.`;
+    }
+
+    const apiKey = process.env.GEMINI_API_KEY;
+    const options: PanelCandidate[] = [];
+
+    const angleConfigs = [
+      {
+        label: "Option 1 (Wide Framing)",
+        anglePrompt: "Wide dramatic establishing angle, atmospheric depth, cinematic perspective",
+        desc: "Wide establishing angle with atmospheric depth and environmental framing",
+        caption: `${safeTitle}: Establishing wide shot capturing atmospheric depth.`,
+        dialogue: "Look at the horizon. Stay in formation.",
+      },
+      {
+        label: "Option 2 (Dynamic Action)",
+        anglePrompt: "Dynamic low-angle action composition, high tension and motion blur",
+        desc: "Low angle, intense high-contrast action composition",
+        caption: `${safeTitle}: Tension rises as the action surges forward.`,
+        dialogue: "Move now! Keep low and press forward!",
+      },
+      {
+        label: "Option 3 (Intimate Perspective)",
+        anglePrompt: "Cinematic medium close-up, dramatic character presence, intense emotional focus",
+        desc: "Medium close-up focusing on character emotion and immediate presence",
+        caption: `${safeTitle}: Focused perspective highlighting the human tension.`,
+        dialogue: "Steady now... this is the moment.",
+      },
+    ];
 
     if (apiKey) {
       try {
         const ai = new GoogleGenAI({ apiKey });
 
-        const angles = [
-          "Wide dramatic shot, establishing shot with atmospheric lighting",
-          "Low-angle action composition, high tension and motion",
-          "Cinematic medium close-up, focusing on emotional details and depth",
-        ];
-
-        // Try generating with Gemini Image API
-        const generatedImages = await Promise.allSettled(
-          angles.slice(0, 2).map(async (angle, index) => {
-            const fullPrompt = `${prompt}. Visual Style: ${style || "Graphic Novel"}. Color accents: ${
-              colorEmphasis || "Muted sepia and slate"
-            }. Camera framing: ${angle}. High quality graphic novel illustration. No watermarks or typography text.`;
+        const results = await Promise.allSettled(
+          angleConfigs.map(async (cfg, index) => {
+            const fullPrompt = `${sceneDescription}.${characterContext} Visual Style: ${safeStyle}. Color accents: ${safeColor}. Camera framing: ${cfg.anglePrompt}. High quality graphic novel illustration. Clean rendering without watermarks, text, or letters.`;
 
             const interaction = await ai.interactions.create({
               model: "gemini-3.1-flash-image",
@@ -57,46 +112,55 @@ export async function POST(request: Request) {
               return {
                 id: `opt_${index + 1}`,
                 image: `data:image/png;base64,${interaction.output_image.data}`,
-                label: `Option ${index + 1} (${index === 0 ? "Wide Framing" : "Dynamic Angle"})`,
-                description: angle,
+                label: cfg.label,
+                description: `${cfg.desc} — ${sceneDescription.slice(0, 120)}`,
+                source: "gemini" as const,
+                caption: cfg.caption,
+                dialogue: cfg.dialogue,
               };
             }
             return null;
           })
         );
 
-        generatedImages.forEach((result) => {
-          if (result.status === "fulfilled" && result.value) {
-            options.push(result.value);
+        results.forEach((res) => {
+          if (res.status === "fulfilled" && res.value) {
+            options.push(res.value);
           }
         });
       } catch (geminiError) {
-        console.warn("Gemini Image API fallback triggered:", geminiError);
+        console.warn("Gemini Image API unavailable or rate-limited. Falling back to development preview.", geminiError instanceof Error ? geminiError.message : "");
       }
     }
 
-    // Fallback or SVG option generation if Gemini API is offline/rate-limited
+    const source: "gemini" | "development-fallback" =
+      options.length > 0 ? "gemini" : "development-fallback";
+
+    // If Gemini returned no options or key was absent, use development fallback previews
     if (options.length === 0) {
-      options = [
-        {
-          id: "opt_1",
-          image: generateSvgScene(sceneTitle, prompt, 1, "#090617", "#9b6cff"),
-          label: "Option 1 (Atmospheric Wide)",
-          description: "Wide establishing angle with fog and atmospheric depth",
-        },
-        {
-          id: "opt_2",
-          image: generateSvgScene(sceneTitle, prompt, 2, "#180a0a", "#ef4444"),
-          label: "Option 2 (Dynamic Action)",
-          description: "Low angle, intense high-contrast cinematic framing",
-        },
-        {
-          id: "opt_3",
-          image: generateSvgScene(sceneTitle, prompt, 3, "#041416", "#06b6d4"),
-          label: "Option 3 (Intimate Perspective)",
-          description: "Focus on character positioning and mood lighting",
-        },
+      const colorSchemes = [
+        { sky: "#090617", accent: "#9b6cff" },
+        { sky: "#180a0a", accent: "#ef4444" },
+        { sky: "#041416", accent: "#06b6d4" },
       ];
+
+      angleConfigs.forEach((cfg, idx) => {
+        options.push({
+          id: `opt_${idx + 1}`,
+          image: generateSvgScene(
+            safeTitle,
+            sceneDescription,
+            idx + 1,
+            colorSchemes[idx].sky,
+            colorSchemes[idx].accent
+          ),
+          label: `${cfg.label} [Dev Preview]`,
+          description: `${cfg.desc} (Development preview — AI image generation unavailable)`,
+          source: "development-fallback",
+          caption: cfg.caption,
+          dialogue: cfg.dialogue,
+        });
+      });
     }
 
     return NextResponse.json({
@@ -104,10 +168,14 @@ export async function POST(request: Request) {
       sceneId,
       options,
       image: options[0].image,
-      message: "Scene candidate options generated successfully.",
+      source,
+      message:
+        source === "gemini"
+          ? "Scene candidate options generated successfully via Gemini."
+          : "Development Preview — AI image generation unavailable. Showing structured preview frames.",
     });
   } catch (error) {
-    console.error("Scene generation error:", error);
+    console.error("Scene generation route error:", error instanceof Error ? error.message : "Unknown error");
     return NextResponse.json(
       {
         success: false,
@@ -155,7 +223,7 @@ function generateSvgScene(
 
       <rect y="600" width="1600" height="300" fill="#030307" />
 
-      <!-- Character Silhouettes -->
+      <!-- Silhouettes -->
       <g fill="#07060c">
         <circle cx="${650 + variant * 30}" cy="540" r="32" />
         <path d="M${610 + variant * 30} 580 Q${650 + variant * 30} 550 ${690 + variant * 30} 580 L710 740 L590 740 Z" />
@@ -163,12 +231,18 @@ function generateSvgScene(
         <path d="M${845 - variant * 20} 600 Q${880 - variant * 20} 575 ${915 - variant * 20} 600 L935 730 L825 730 Z" />
       </g>
 
-      <!-- Panel Frame & Overlay Badge -->
+      <!-- Panel Frame & Explicit Dev Preview Badge -->
       <rect x="30" y="30" width="1540" height="840" fill="none" stroke="${accentColor}" stroke-opacity="0.3" stroke-width="4" rx="16" />
       
-      <rect x="60" y="60" width="220" height="36" rx="8" fill="#000000" fill-opacity="0.75" />
-      <text x="75" y="83" fill="#ffffff" font-family="sans-serif" font-size="14" font-weight="bold">
-        OPTION 0${variant} • FRAME PREVIEW
+      <!-- Prominent, Honest Development Preview Label -->
+      <rect x="60" y="60" width="520" height="40" rx="8" fill="#000000" fill-opacity="0.88" stroke="#eab308" stroke-width="1.5" />
+      <text x="80" y="85" fill="#facc15" font-family="sans-serif" font-size="14" font-weight="bold">
+        DEVELOPMENT PREVIEW — AI image generation unavailable
+      </text>
+
+      <rect x="60" y="110" width="160" height="28" rx="6" fill="#000000" fill-opacity="0.75" />
+      <text x="75" y="129" fill="#ffffff" font-family="sans-serif" font-size="12" font-weight="bold">
+        OPTION 0${variant} PREVIEW
       </text>
 
       <text x="80" y="760" fill="#ffffff" font-family="sans-serif" font-size="36" font-weight="bold">${title}</text>

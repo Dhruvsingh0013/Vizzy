@@ -1,76 +1,40 @@
 "use client";
 
-import React, { useEffect, useState, useRef } from "react";
-import { motion, AnimatePresence } from "framer-motion";
+import React, { useEffect, useState, useRef, useCallback } from "react";
+import { motion } from "framer-motion";
 import {
-  ArrowLeft,
   Sparkles,
   Send,
-  Plus,
   Play,
-  RotateCcw,
   Check,
-  CheckCircle2,
   Users,
-  Image as ImageIcon,
   Edit2,
   Trash2,
   BookOpen,
   ChevronDown,
   ChevronUp,
-  Layers,
-  Wand2,
-  Download,
   Loader2,
-  Eye,
-  RefreshCw,
-  Palette,
-  X,
   FileText,
   Bookmark,
-  UserPlus,
   Sun,
   Moon,
+  AlertCircle,
+  AlertTriangle,
+  RotateCcw,
 } from "lucide-react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
-import SlideshowPlayer, { SlidePanel } from "../components/SlideshowPlayer";
+import SlideshowPlayer from "../components/SlideshowPlayer";
 import GraphicNovelSpreadModal from "../components/GraphicNovelSpreadModal";
 import ScriptImportModal from "../components/ScriptImportModal";
-
-type ProjectData = {
-  title: string;
-  storyType: string;
-  idea: string;
-  world?: string;
-  tone?: string;
-  colorEmphasis?: string;
-};
-
-type Character = {
-  id: string;
-  name: string;
-  role: string;
-  description: string;
-  image?: string;
-};
-
-type PanelCandidate = {
-  id: string;
-  image: string;
-  label: string;
-  description: string;
-};
-
-type ChatMessage = {
-  id: string;
-  sender: "vizzy" | "user";
-  text: string;
-  timestamp: string;
-  candidates?: PanelCandidate[];
-  selectedCandidateId?: string;
-  approved?: boolean;
-};
+import {
+  ProjectData,
+  Character,
+  PanelCandidate,
+  ChatMessage,
+  SlidePanel,
+  GenerateSceneResponse,
+} from "@/types";
+import { postJson, ApiError } from "@/lib/api";
 
 const studioBackgrounds = [
   {
@@ -212,10 +176,18 @@ const palettePresets = [
   },
 ];
 
-export default function StudioPage() {
-  const router = useRouter();
+let idCounter = 0;
+function getUniqueId(prefix: string): string {
+  idCounter += 1;
+  return `${prefix}_${Date.now()}_${idCounter}`;
+}
 
-  // Environment Background state (ported from create webpage)
+function getNowTimeString(): string {
+  return new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+}
+
+export default function StudioPage() {
+  // Environment Background state
   const [activeBackground, setActiveBackground] = useState(0);
 
   // Background slideshow interval
@@ -233,16 +205,28 @@ export default function StudioPage() {
   const [theme, setTheme] = useState<"dark" | "light">("dark");
 
   useEffect(() => {
-    const savedTheme = localStorage.getItem("vizzy-theme") as "dark" | "light" | null;
-    if (savedTheme) {
-      setTheme(savedTheme);
-    }
+    const timer = setTimeout(() => {
+      try {
+        const savedTheme = localStorage.getItem("vizzy-theme") as "dark" | "light" | null;
+        if (savedTheme === "dark" || savedTheme === "light") {
+          setTheme(savedTheme);
+        }
+      } catch {
+        // LocalStorage access may be restricted
+      }
+    }, 0);
+
+    return () => clearTimeout(timer);
   }, []);
 
   const toggleTheme = () => {
     const next = theme === "dark" ? "light" : "dark";
     setTheme(next);
-    localStorage.setItem("vizzy-theme", next);
+    try {
+      localStorage.setItem("vizzy-theme", next);
+    } catch {
+      // Ignore storage error
+    }
   };
 
   const isDark = theme === "dark";
@@ -272,6 +256,7 @@ export default function StudioPage() {
       description: "Landing craft slicing through dark Atlantic ocean swells at 0600 hours.",
       caption: "0600 Hours. The Atlantic surf slammed against the cold steel hull.",
       dialogue: "Keep your heads down and check your gear!",
+      source: "development-fallback",
       image: generateInitialSvg("Approach to Normandy", "Landing craft in stormy morning sea", 1),
     },
     {
@@ -280,6 +265,7 @@ export default function StudioPage() {
       description: "The steel ramp splashes into cold surf as smoke fills the coastline.",
       caption: "The ramp dropped into icy sea spray and thunderous gunfire.",
       dialogue: "Move! Move! Get to the sea wall!",
+      source: "development-fallback",
       image: generateInitialSvg("The Ramp Drops", "Steel ramp dropping into ocean surf with smoke", 2),
     },
   ]);
@@ -290,6 +276,11 @@ export default function StudioPage() {
   const [isAiThinking, setIsAiThinking] = useState(false);
   const [isGeneratingPanel, setIsGeneratingPanel] = useState(false);
 
+  // Status & Refinement State
+  const [refiningCandidate, setRefiningCandidate] = useState<PanelCandidate | null>(null);
+  const [storageWarning, setStorageWarning] = useState<string | null>(null);
+  const [apiNotice, setApiNotice] = useState<string | null>(null);
+
   // Modals state
   const [showSlideshow, setShowSlideshow] = useState(false);
   const [showBookSpread, setShowBookSpread] = useState(false);
@@ -297,6 +288,14 @@ export default function StudioPage() {
   const [editingPanel, setEditingPanel] = useState<SlidePanel | null>(null);
 
   const chatBottomRef = useRef<HTMLDivElement>(null);
+  const activeAbortController = useRef<AbortController | null>(null);
+
+  // Abort ongoing requests on unmount
+  useEffect(() => {
+    return () => {
+      activeAbortController.current?.abort();
+    };
+  }, []);
 
   // Switch Story Preset handler
   const handleSelectPreset = (presetId: string) => {
@@ -316,9 +315,9 @@ export default function StudioPage() {
     setPromptChips(found.promptChips);
 
     const presetGreeting: ChatMessage = {
-      id: `msg_preset_${Date.now()}`,
+      id: getUniqueId("msg_preset"),
       sender: "vizzy",
-      timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+      timestamp: getNowTimeString(),
       text: `Switched active universe to **"${found.title}"** (${found.storyType})!
 
 🎨 **World & Setting**: ${found.world}  
@@ -339,135 +338,293 @@ Tell me what visual scene you'd like to compose next, or choose one of the promp
     });
   };
 
-  // Load state on mount
+  // Load state on mount - Priority 1 Item 6 (load project into local object first)
   useEffect(() => {
-    const savedProject = sessionStorage.getItem("vizzy-project");
-    const savedCharacters = sessionStorage.getItem("vizzy-characters");
+    const timer = setTimeout(() => {
+      let loadedProject: ProjectData = {
+        title: storyPresets[0].title,
+        storyType: storyPresets[0].storyType,
+        idea: storyPresets[0].idea,
+        world: storyPresets[0].world,
+        tone: storyPresets[0].tone,
+        colorEmphasis: storyPresets[0].colorEmphasis,
+      };
+      let loadedCharacters = storyPresets[0].characters;
+      let loadedPanels = [
+        {
+          id: "panel_1",
+          title: "Approach to Normandy",
+          description: "Landing craft slicing through dark Atlantic ocean swells at 0600 hours.",
+          caption: "0600 Hours. The Atlantic surf slammed against the cold steel hull.",
+          dialogue: "Keep your heads down and check your gear!",
+          source: "development-fallback" as const,
+          image: generateInitialSvg("Approach to Normandy", "Landing craft in stormy morning sea", 1),
+        },
+        {
+          id: "panel_2",
+          title: "The Ramp Drops",
+          description: "The steel ramp splashes into cold surf as smoke fills the coastline.",
+          caption: "The ramp dropped into icy sea spray and thunderous gunfire.",
+          dialogue: "Move! Move! Get to the sea wall!",
+          source: "development-fallback" as const,
+          image: generateInitialSvg("The Ramp Drops", "Steel ramp dropping into ocean surf with smoke", 2),
+        },
+      ];
 
-    if (savedProject) {
       try {
-        const parsed = JSON.parse(savedProject);
-        setProject((prev) => ({ ...prev, ...parsed }));
+        const savedProject = sessionStorage.getItem("vizzy-project");
+        if (savedProject) {
+          const parsed = JSON.parse(savedProject);
+          if (parsed && typeof parsed === "object") {
+            loadedProject = { ...loadedProject, ...parsed };
+          }
+        }
       } catch (e) {
-        console.error(e);
+        console.warn("Could not read vizzy-project from sessionStorage:", e);
+        try {
+          sessionStorage.removeItem("vizzy-project");
+        } catch {}
       }
-    }
 
-    if (savedCharacters) {
       try {
-        setCharacters(JSON.parse(savedCharacters));
+        const savedCharacters = sessionStorage.getItem("vizzy-characters");
+        if (savedCharacters) {
+          const parsed = JSON.parse(savedCharacters);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            loadedCharacters = parsed;
+          }
+        }
       } catch (e) {
-        console.error(e);
+        console.warn("Could not read vizzy-characters from sessionStorage:", e);
+        try {
+          sessionStorage.removeItem("vizzy-characters");
+        } catch {}
       }
-    }
 
-    // Welcome conversation from Vizzy
-    const initialWelcome: ChatMessage = {
-      id: "msg_welcome",
-      sender: "vizzy",
-      timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
-      text: `Welcome to **Vizzy Studio**! I am your AI Creative Director.
+      try {
+        const savedPanels = sessionStorage.getItem("vizzy-panels");
+        if (savedPanels) {
+          const parsed = JSON.parse(savedPanels);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            loadedPanels = parsed;
+          }
+        }
+      } catch (e) {
+        console.warn("Could not read vizzy-panels from sessionStorage:", e);
+        try {
+          sessionStorage.removeItem("vizzy-panels");
+        } catch {}
+      }
 
-We are developing a **${project.storyType}** titled **"${project.title}"**.
+      setProject(loadedProject);
+      setCharacters(loadedCharacters);
+      setPanels(loadedPanels);
+
+      // Initial welcome message built directly from the freshly loaded object
+      const initialWelcome: ChatMessage = {
+        id: "msg_welcome",
+        sender: "vizzy",
+        timestamp: getNowTimeString(),
+        text: `Welcome to **Vizzy Studio**! I am your AI Creative Director.
+
+We are developing a **${loadedProject.storyType}** titled **"${loadedProject.title}"**.
 
 🎨 **Aesthetic Style**: High-contrast Graphic Novel  
-🖌️ **Color Palette Emphasis**: ${project.colorEmphasis}  
-📜 **Premise / Notes**: "${project.idea}"
+🖌️ **Color Palette Emphasis**: ${loadedProject.colorEmphasis || "Custom"}  
+📜 **Premise / Notes**: "${loadedProject.idea || "Visual story development"}"
 
-I'm ready to craft **Panel ${panels.length + 1}** with you. What visual moment happens next, or would you like me to propose a scene?`,
-    };
+I'm ready to craft **Panel ${loadedPanels.length + 1}** with you. What visual moment happens next, or would you like me to propose a scene?`,
+      };
 
-    setMessages([initialWelcome]);
+      setMessages([initialWelcome]);
+    }, 0);
+
+    return () => clearTimeout(timer);
   }, []);
+
+  // Persist panels to sessionStorage - Priority 2 Item 11, 12, 13
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      try {
+        sessionStorage.setItem("vizzy-panels", JSON.stringify(panels));
+        setStorageWarning(null);
+      } catch (err: unknown) {
+        if (
+          err instanceof Error &&
+          (err.name === "QuotaExceededError" || err.name === "NS_ERROR_DOM_QUOTA_REACHED")
+        ) {
+          setStorageWarning("Browser storage quota reached. New panels remain active in session memory.");
+        }
+      }
+    }, 0);
+
+    return () => clearTimeout(timer);
+  }, [panels]);
 
   // Auto-scroll chat
   useEffect(() => {
     chatBottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, isAiThinking, isGeneratingPanel]);
 
-  // Send message handler
-  const handleSendMessage = async (customPrompt?: string) => {
-    const textToSend = customPrompt || inputText;
-    if (!textToSend.trim() || isAiThinking) return;
-
-    setInputText("");
-
-    const userMsg: ChatMessage = {
-      id: `msg_user_${Date.now()}`,
-      sender: "user",
-      text: textToSend.trim(),
-      timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
-    };
-
-    setMessages((prev) => [...prev, userMsg]);
-    setIsAiThinking(true);
-
-    try {
-      const response = await fetch("/api/chat", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          messages: [...messages, userMsg].map((m) => ({ role: m.sender, content: m.text })),
-          project,
-          mode: "panel",
-          currentPanelIndex: panels.length,
-        }),
-      });
-
-      const data = await response.json();
-      setIsAiThinking(false);
-
-      const vizzyReply: ChatMessage = {
-        id: `msg_vizzy_${Date.now()}`,
-        sender: "vizzy",
-        text: data.reply || "Let's bring this scene to life visually!",
-        timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
-      };
-
-      setMessages((prev) => [...prev, vizzyReply]);
-
-      // Automatically trigger image candidate variations
-      triggerPanelGeneration(textToSend);
-    } catch (err) {
-      console.error(err);
-      setIsAiThinking(false);
-    }
-  };
-
   // Generate candidate panel options
-  const triggerPanelGeneration = async (promptQuery: string) => {
-    setIsGeneratingPanel(true);
+  const triggerPanelGeneration = useCallback(
+    async (
+      promptQuery: string,
+      refinementPrompt?: string,
+      baseCandidate?: PanelCandidate
+    ) => {
+      setIsGeneratingPanel(true);
+      setApiNotice(null);
 
-    try {
-      const response = await fetch("/api/generate-scene", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          prompt: promptQuery,
-          sceneTitle: `Panel ${panels.length + 1}`,
-          style: project.storyType,
-          colorEmphasis: project.colorEmphasis,
-          characters,
-        }),
-      });
+      // Create new abort controller
+      activeAbortController.current?.abort();
+      const controller = new AbortController();
+      activeAbortController.current = controller;
 
-      const data = await response.json();
-      setIsGeneratingPanel(false);
+      try {
+        const data = await postJson<GenerateSceneResponse>(
+          "/api/generate-scene",
+          {
+            prompt: promptQuery,
+            sceneTitle: `Panel ${panels.length + 1}`,
+            style: project.storyType,
+            colorEmphasis: project.colorEmphasis,
+            characters,
+            refinementPrompt,
+            baseDescription: baseCandidate?.description,
+          },
+          controller.signal
+        );
 
-      const candidateMsg: ChatMessage = {
-        id: `msg_candidates_${Date.now()}`,
-        sender: "vizzy",
-        text: `Here are 3 framing options for **Panel ${panels.length + 1}**. Pick your favorite or ask to refine:`,
-        timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
-        candidates: data.options || [],
+        setIsGeneratingPanel(false);
+
+        if (data.source === "development-fallback") {
+          setApiNotice(
+            "Development Preview active: Gemini Image API is unavailable or unconfigured. Showing structured preview frames."
+          );
+        }
+
+        const candidateMsg: ChatMessage = {
+          id: getUniqueId("msg_candidates"),
+          sender: "vizzy",
+          text: `Here are **${data.options.length} framing options** for **Panel ${panels.length + 1}**${
+            data.source === "development-fallback" ? " *(Development Previews)*" : ""
+          }. Pick your favorite or ask to refine:`,
+          timestamp: getNowTimeString(),
+          candidates: data.options || [],
+        };
+
+        setMessages((prev) => [...prev, candidateMsg]);
+      } catch (err) {
+        if (err instanceof Error && err.name === "AbortError") {
+          return;
+        }
+        console.warn("Panel generation error:", err);
+        setIsGeneratingPanel(false);
+
+        const errorText =
+          err instanceof ApiError
+            ? err.message
+            : "Image generation encountered a temporary issue. You can retry below.";
+
+        const errorMsg: ChatMessage = {
+          id: getUniqueId("msg_error"),
+          sender: "vizzy",
+          text: `⚠️ **Generation Error**: ${errorText}`,
+          timestamp: getNowTimeString(),
+          isError: true,
+          canRetry: true,
+          retryPrompt: promptQuery,
+        };
+
+        setMessages((prev) => [...prev, errorMsg]);
+      }
+    },
+    [panels.length, project.storyType, project.colorEmphasis, characters]
+  );
+
+  // Send message handler
+  const handleSendMessage = useCallback(
+    async (customPrompt?: string) => {
+      const textToSend = customPrompt || inputText;
+      if (!textToSend.trim() || isAiThinking || isGeneratingPanel) return;
+
+      setInputText("");
+
+      const isRefining = !!refiningCandidate;
+      const currentRefineTarget = refiningCandidate;
+      setRefiningCandidate(null);
+
+      const userMsg: ChatMessage = {
+        id: getUniqueId("msg_user"),
+        sender: "user",
+        text: textToSend.trim(),
+        timestamp: getNowTimeString(),
       };
 
-      setMessages((prev) => [...prev, candidateMsg]);
-    } catch (err) {
-      console.error(err);
-      setIsGeneratingPanel(false);
-    }
-  };
+      setMessages((prev) => [...prev, userMsg]);
+      setIsAiThinking(true);
+
+      // Cancel prior request
+      activeAbortController.current?.abort();
+      const controller = new AbortController();
+      activeAbortController.current = controller;
+
+      try {
+        const data = await postJson<{ reply?: string; source?: string }>(
+          "/api/chat",
+          {
+            messages: [...messages, userMsg].map((m) => ({ role: m.sender, content: m.text })),
+            project,
+            mode: "panel",
+            currentPanelIndex: panels.length,
+          },
+          controller.signal
+        );
+
+        setIsAiThinking(false);
+
+        const vizzyReply: ChatMessage = {
+          id: getUniqueId("msg_vizzy"),
+          sender: "vizzy",
+          text: data.reply || "Let's bring this scene to life visually!",
+          timestamp: getNowTimeString(),
+        };
+
+        setMessages((prev) => [...prev, vizzyReply]);
+
+        // Automatically trigger image candidate variations (or refinement)
+        if (isRefining && currentRefineTarget) {
+          triggerPanelGeneration(
+            currentRefineTarget.description,
+            textToSend,
+            currentRefineTarget
+          );
+        } else {
+          triggerPanelGeneration(textToSend);
+        }
+      } catch (err) {
+        if (err instanceof Error && err.name === "AbortError") {
+          return;
+        }
+        console.warn("Chat error:", err);
+        setIsAiThinking(false);
+
+        const errorReply: ChatMessage = {
+          id: getUniqueId("msg_chat_err"),
+          sender: "vizzy",
+          text: `⚠️ **Connection notice**: ${
+            err instanceof ApiError ? err.message : "Unable to reach director. Proceeding with scene framing..."
+          }`,
+          timestamp: getNowTimeString(),
+        };
+
+        setMessages((prev) => [...prev, errorReply]);
+        triggerPanelGeneration(textToSend);
+      }
+    },
+    [inputText, isAiThinking, isGeneratingPanel, refiningCandidate, messages, project, panels.length, triggerPanelGeneration]
+  );
 
   // User selects candidate option
   const handleSelectCandidate = (msgId: string, candidateId: string) => {
@@ -476,35 +633,41 @@ I'm ready to craft **Panel ${panels.length + 1}** with you. What visual moment h
     );
   };
 
-  // User requests refinement of an option
+  // User requests refinement of an option - Priority 2 Item 10
   const handleRefineOption = (candidate: PanelCandidate) => {
-    setInputText(`Refine ${candidate.label}: make the lighting darker, add heavier sea fog, and bring the camera closer.`);
+    setRefiningCandidate(candidate);
+    setInputText(`Refine ${candidate.label}: adjust lighting, deepen contrast, and emphasize character focus.`);
   };
 
-  // User approves candidate option into panel timeline
-  const handleApprovePanel = (candidate: PanelCandidate) => {
-    const newPanel: SlidePanel = {
-      id: `panel_${Date.now()}`,
-      title: `Panel ${panels.length + 1}: ${candidate.label}`,
-      description: candidate.description,
-      image: candidate.image,
-      caption: `Panel ${panels.length + 1}: Troops push forward under intense fire.`,
-      dialogue: "Spread out and advance! Take that ridge!",
-    };
+  // User approves candidate option into panel timeline - Priority 2 Item 9 (no fake dialogue)
+  const handleApprovePanel = useCallback(
+    (candidate: PanelCandidate) => {
+      const cleanLabel = candidate.label.replace(/\[.*?\]/, "").trim();
+      const newPanel: SlidePanel = {
+        id: getUniqueId("panel"),
+        title: `Panel ${panels.length + 1}: ${cleanLabel}`,
+        description: candidate.description,
+        image: candidate.image,
+        caption: candidate.caption || candidate.description.slice(0, 140),
+        dialogue: candidate.dialogue || undefined,
+        source: candidate.source,
+      };
 
-    setPanels((prev) => [...prev, newPanel]);
+      setPanels((prev) => [...prev, newPanel]);
 
-    const confirmMsg: ChatMessage = {
-      id: `msg_approved_${Date.now()}`,
-      sender: "vizzy",
-      text: `🎉 **Panel ${panels.length + 1} locked into your sequence!**
+      const confirmMsg: ChatMessage = {
+        id: getUniqueId("msg_approved"),
+        sender: "vizzy",
+        text: `🎉 **Panel ${panels.length + 1} locked into your sequence!**
 
 We now have **${panels.length + 1} panels**. Preview the auto-running loop anytime with the top play button. What happens in the next panel?`,
-      timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
-    };
+        timestamp: getNowTimeString(),
+      };
 
-    setMessages((prev) => [...prev, confirmMsg]);
-  };
+      setMessages((prev) => [...prev, confirmMsg]);
+    },
+    [panels.length]
+  );
 
   // Timeline panel manipulation
   const movePanel = (index: number, direction: "up" | "down") => {
@@ -531,15 +694,17 @@ We now have **${panels.length + 1} panels**. Preview the auto-running loop anyti
   const handleImportPanels = (importedPanels: SlidePanel[]) => {
     setPanels((prev) => [...prev, ...importedPanels]);
     const notifyMsg: ChatMessage = {
-      id: `msg_import_${Date.now()}`,
+      id: getUniqueId("msg_import"),
       sender: "vizzy",
       text: `📜 **Successfully parsed and imported ${importedPanels.length} new panels from your script!**
 
 Your story timeline has been updated with these scene beats. You can now generate candidate artwork or edit captions for any panel.`,
-      timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+      timestamp: getNowTimeString(),
     };
     setMessages((prev) => [...prev, notifyMsg]);
   };
+
+  const isBusy = isAiThinking || isGeneratingPanel;
 
   return (
     <div
@@ -665,7 +830,7 @@ Your story timeline has been updated with these scene beats. You can now generat
             <FileText size={14} /> Import Script
           </button>
 
-          {/* View Comic Book Page Spread */}
+          {/* View Printable Graphic Novel Page Spread */}
           <button
             onClick={() => setShowBookSpread(true)}
             className={`flex items-center gap-1.5 px-3.5 py-2 rounded-xl border text-xs font-bold transition cursor-pointer backdrop-blur-sm ${
@@ -690,9 +855,27 @@ Your story timeline has been updated with these scene beats. You can now generat
         </div>
       </nav>
 
+      {/* STORAGE OR API WARNING BANNER */}
+      {(storageWarning || apiNotice) && (
+        <div className="relative z-20 px-6 py-2 bg-amber-500/15 border-b border-amber-500/30 backdrop-blur-md flex items-center justify-between text-xs text-amber-300">
+          <div className="flex items-center gap-2">
+            <AlertTriangle size={14} className="shrink-0 text-amber-400" />
+            <span>{storageWarning || apiNotice}</span>
+          </div>
+          <button
+            onClick={() => {
+              setStorageWarning(null);
+              setApiNotice(null);
+            }}
+            className="text-[10px] font-bold underline cursor-pointer hover:text-white"
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
+
       {/* THREE-COLUMN WORKSPACE GRID (50% Glass Translucency) */}
       <div className="relative z-10 flex-1 grid grid-cols-1 lg:grid-cols-[280px_1fr_320px] overflow-hidden">
-        
         {/* LEFT SIDEBAR: STORY BIBLE, ENVIRONMENT & PALETTES */}
         <aside
           className={`hidden lg:flex flex-col border-r p-5 overflow-y-auto gap-5 select-none transition-colors duration-300 backdrop-blur-md ${
@@ -701,7 +884,7 @@ Your story timeline has been updated with these scene beats. You can now generat
               : "border-black/10 bg-white/45 text-zinc-900"
           }`}
         >
-          {/* ENVIRONMENT BACKGROUND SELECTOR (From create page) */}
+          {/* ENVIRONMENT BACKGROUND SELECTOR */}
           <div>
             <div className="flex items-center justify-between mb-2">
               <p
@@ -728,7 +911,11 @@ Your story timeline has been updated with these scene beats. You can now generat
                   }`}
                   title={bg.name}
                 >
-                  <img src={bg.src} alt={bg.name} className="w-full h-full object-cover" />
+                  <img
+                    src={bg.src}
+                    alt={`Environment background ${bg.name}`}
+                    className="w-full h-full object-cover"
+                  />
                 </button>
               ))}
             </div>
@@ -760,14 +947,32 @@ Your story timeline has been updated with these scene beats. You can now generat
                   {project.title}
                 </span>
               </div>
-              <div>
-                <span className="text-[9px] text-zinc-400 font-bold block">FORMAT</span>
-                <span className="text-xs font-bold text-purple-600 dark:text-purple-300">
-                  {project.storyType}
-                </span>
+
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <span className="text-[9px] text-zinc-400 font-bold block">FORMAT</span>
+                  <span
+                    className={`text-xs font-bold ${
+                      isDark ? "text-zinc-200" : "text-zinc-800"
+                    }`}
+                  >
+                    {project.storyType}
+                  </span>
+                </div>
+                <div>
+                  <span className="text-[9px] text-zinc-400 font-bold block">TONE</span>
+                  <span
+                    className={`text-xs font-bold truncate block ${
+                      isDark ? "text-zinc-200" : "text-zinc-800"
+                    }`}
+                  >
+                    {project.tone}
+                  </span>
+                </div>
               </div>
+
               <div>
-                <span className="text-[9px] text-zinc-400 font-bold block">SETTING / WORLD</span>
+                <span className="text-[9px] text-zinc-400 font-bold block">SETTING</span>
                 <span
                   className={`text-xs font-bold ${
                     isDark ? "text-zinc-200" : "text-zinc-800"
@@ -776,20 +981,10 @@ Your story timeline has been updated with these scene beats. You can now generat
                   {project.world}
                 </span>
               </div>
-              <div>
-                <span className="text-[9px] text-zinc-400 font-bold block">TONE</span>
-                <span
-                  className={`text-xs font-bold ${
-                    isDark ? "text-zinc-200" : "text-zinc-800"
-                  }`}
-                >
-                  {project.tone}
-                </span>
-              </div>
             </div>
           </div>
 
-          {/* COLOR PALETTE PRESETS (CLICKABLE) */}
+          {/* PALETTE PRESETS */}
           <div>
             <p
               className={`text-[10px] font-mono font-bold tracking-widest uppercase mb-2 ${
@@ -798,44 +993,49 @@ Your story timeline has been updated with these scene beats. You can now generat
             >
               COLOR PALETTE EMPHASIS
             </p>
-            <p className="text-[10px] text-zinc-400 mb-3">{project.colorEmphasis}</p>
-
-            <div className="space-y-2">
-              {palettePresets.map((pal, idx) => (
-                <div
-                  key={pal.id}
+            <div className="space-y-1.5">
+              {palettePresets.map((palette, idx) => (
+                <button
+                  key={palette.id}
                   onClick={() => {
                     setActivePaletteIndex(idx);
-                    setProject((prev) => ({ ...prev, colorEmphasis: pal.emphasis }));
+                    setProject((prev) => ({ ...prev, colorEmphasis: palette.emphasis }));
                   }}
-                  className={`p-2.5 rounded-xl border cursor-pointer transition flex items-center justify-between backdrop-blur-sm ${
-                    activePaletteIndex === idx
-                      ? isDark
-                        ? "bg-purple-600/30 border-purple-400 shadow-md"
-                        : "bg-purple-100/80 border-purple-400 shadow-sm text-purple-900"
+                  className={`w-full flex items-center justify-between p-2 rounded-xl border text-left cursor-pointer transition backdrop-blur-sm ${
+                    idx === activePaletteIndex
+                      ? "border-purple-500 bg-purple-500/10"
                       : isDark
-                      ? "bg-black/30 border-white/10 hover:border-white/25 text-zinc-300"
-                      : "bg-white/60 border-black/10 hover:border-black/20 text-zinc-800 shadow-sm"
+                      ? "border-white/10 bg-black/20 hover:border-white/20"
+                      : "border-black/10 bg-white/50 hover:border-purple-300"
                   }`}
                 >
-                  <span className="text-xs font-bold">{pal.name}</span>
-                  <div className="flex gap-1.5">
-                    {pal.colors.map((c, i) => (
-                      <div
-                        key={i}
-                        className="w-4 h-4 rounded-full border border-black/15 dark:border-white/20"
+                  <div className="min-w-0">
+                    <p
+                      className={`text-xs font-bold truncate ${
+                        isDark ? "text-zinc-200" : "text-zinc-800"
+                      }`}
+                    >
+                      {palette.name}
+                    </p>
+                    <p className="text-[9px] text-zinc-400 truncate">{palette.emphasis}</p>
+                  </div>
+                  <div className="flex gap-1 shrink-0 ml-2">
+                    {palette.colors.map((c) => (
+                      <span
+                        key={c}
+                        className="w-3.5 h-3.5 rounded-full border border-white/20"
                         style={{ backgroundColor: c }}
                       />
                     ))}
                   </div>
-                </div>
+                </button>
               ))}
             </div>
           </div>
 
-          {/* CHARACTER CAST (WITH INJECTION) */}
+          {/* CHARACTERS LIST - Priority 4 Item 22 (empty state handled) */}
           <div>
-            <div className="flex items-center justify-between mb-3">
+            <div className="flex items-center justify-between mb-2">
               <p
                 className={`text-[10px] font-mono font-bold tracking-widest uppercase ${
                   isDark ? "text-purple-400" : "text-purple-700"
@@ -850,46 +1050,75 @@ Your story timeline has been updated with these scene beats. You can now generat
                 + Edit Cast
               </Link>
             </div>
-            <div className="space-y-2">
-              {characters.map((char) => (
-                <div
-                  key={char.id}
-                  className={`flex items-center justify-between p-2.5 rounded-xl border group transition backdrop-blur-sm ${
-                    isDark
-                      ? "bg-black/30 border-white/10 hover:border-purple-400/40"
-                      : "bg-white/60 border-black/10 hover:border-purple-300 shadow-sm"
-                  }`}
-                >
-                  <div className="flex items-center gap-2.5 min-w-0">
-                    <div className="w-7 h-7 rounded-lg bg-purple-900/40 border border-purple-500/40 flex items-center justify-center text-purple-600 dark:text-purple-300 font-bold text-xs shrink-0">
-                      {char.name[0]}
-                    </div>
-                    <div className="min-w-0">
-                      <p
-                        className={`text-xs font-bold truncate ${
-                          isDark ? "text-zinc-200" : "text-zinc-800"
-                        }`}
-                      >
-                        {char.name}
-                      </p>
-                      <p className="text-[9px] text-zinc-400 truncate">{char.role}</p>
-                    </div>
-                  </div>
 
-                  <button
-                    onClick={() => handleTagCharacter(char)}
-                    className="opacity-0 group-hover:opacity-100 px-2 py-1 rounded bg-purple-600/30 hover:bg-purple-600 text-[9px] font-bold text-purple-700 dark:text-purple-200 hover:text-white transition cursor-pointer"
-                    title="Insert into chat prompt"
+            {characters.length === 0 ? (
+              <div
+                className={`p-4 rounded-xl border border-dashed text-center ${
+                  isDark ? "border-white/15 bg-black/20" : "border-black/15 bg-white/40"
+                }`}
+              >
+                <p className="text-xs text-zinc-400 mb-2">No characters yet</p>
+                <Link
+                  href="/characters"
+                  className="inline-block px-3 py-1 rounded-lg bg-purple-600/30 text-purple-300 text-[10px] font-bold hover:bg-purple-600 hover:text-white transition"
+                >
+                  Create Character
+                </Link>
+              </div>
+            ) : (
+              <div className="space-y-2">
+                {characters.map((char) => (
+                  <div
+                    key={char.id}
+                    className={`flex items-center justify-between p-2.5 rounded-xl border group transition backdrop-blur-sm ${
+                      isDark
+                        ? "bg-black/30 border-white/10 hover:border-purple-400/40"
+                        : "bg-white/60 border-black/10 hover:border-purple-300 shadow-sm"
+                    }`}
                   >
-                    + Tag
-                  </button>
-                </div>
-              ))}
-            </div>
+                    <div className="flex items-center gap-2.5 min-w-0">
+                      {char.image ? (
+                        <img
+                          src={char.image}
+                          alt={`Character reference for ${char.name}`}
+                          className="w-7 h-7 rounded-lg object-cover border border-purple-500/40 shrink-0"
+                          onError={(e) => {
+                            e.currentTarget.style.display = "none";
+                          }}
+                        />
+                      ) : (
+                        <div className="w-7 h-7 rounded-lg bg-purple-900/40 border border-purple-500/40 flex items-center justify-center text-purple-600 dark:text-purple-300 font-bold text-xs shrink-0">
+                          {char.name[0]}
+                        </div>
+                      )}
+                      <div className="min-w-0">
+                        <p
+                          className={`text-xs font-bold truncate ${
+                            isDark ? "text-zinc-200" : "text-zinc-800"
+                          }`}
+                        >
+                          {char.name}
+                        </p>
+                        <p className="text-[9px] text-zinc-400 truncate">{char.role}</p>
+                      </div>
+                    </div>
+
+                    <button
+                      onClick={() => handleTagCharacter(char)}
+                      disabled={isBusy}
+                      className="opacity-0 group-hover:opacity-100 px-2 py-1 rounded bg-purple-600/30 hover:bg-purple-600 text-[9px] font-bold text-purple-700 dark:text-purple-200 hover:text-white transition cursor-pointer disabled:opacity-30"
+                      title="Insert character reference into prompt"
+                    >
+                      + Tag
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         </aside>
 
-        {/* MIDDLE: CHAT INTERFACE & MULTI-OPTION CARDS (50% Glass Translucency) */}
+        {/* MIDDLE: CHAT INTERFACE & MULTI-OPTION CARDS */}
         <main
           className={`flex flex-col overflow-hidden relative transition-colors duration-300 backdrop-blur-sm ${
             isDark ? "bg-black/30" : "bg-white/30"
@@ -907,10 +1136,22 @@ Your story timeline has been updated with these scene beats. You can now generat
                 {/* Avatar */}
                 <div
                   className={`w-9 h-9 rounded-full flex items-center justify-center text-white shrink-0 shadow-md ${
-                    msg.sender === "vizzy" ? "bg-purple-600" : "bg-zinc-700"
+                    msg.sender === "vizzy"
+                      ? msg.isError
+                        ? "bg-amber-600"
+                        : "bg-purple-600"
+                      : "bg-zinc-700"
                   }`}
                 >
-                  {msg.sender === "vizzy" ? <Sparkles size={16} /> : <Users size={16} />}
+                  {msg.sender === "vizzy" ? (
+                    msg.isError ? (
+                      <AlertCircle size={16} />
+                    ) : (
+                      <Sparkles size={16} />
+                    )
+                  ) : (
+                    <Users size={16} />
+                  )}
                 </div>
 
                 {/* Message Content */}
@@ -918,37 +1159,44 @@ Your story timeline has been updated with these scene beats. You can now generat
                   <div className="flex items-baseline gap-2 mb-1">
                     <span
                       className={`text-xs font-bold ${
-                        isDark ? "text-zinc-200" : "text-zinc-700"
+                        isDark ? "text-zinc-300" : "text-zinc-700"
                       }`}
                     >
-                      {msg.sender === "vizzy" ? "Vizzy" : "You"}
+                      {msg.sender === "vizzy" ? "Vizzy AI Director" : "You"}
                     </span>
-                    <span
-                      className={`text-[9px] font-mono ${
-                        isDark ? "text-zinc-400" : "text-zinc-500"
-                      }`}
-                    >
-                      {msg.timestamp}
-                    </span>
+                    <span className="text-[10px] text-zinc-400 font-mono">{msg.timestamp}</span>
                   </div>
 
                   <div
-                    className={`p-4 rounded-2xl text-sm leading-relaxed backdrop-blur-md ${
+                    className={`rounded-2xl p-4 text-sm leading-relaxed ${
                       msg.sender === "user"
-                        ? "bg-purple-600/90 text-white rounded-tr-none shadow-md"
+                        ? "bg-purple-600 text-white rounded-tr-none shadow-lg shadow-purple-900/30"
+                        : msg.isError
+                        ? "bg-amber-950/40 border border-amber-500/40 text-amber-200 rounded-tl-none"
                         : isDark
                         ? "bg-black/50 border border-white/15 text-zinc-100 rounded-tl-none shadow-md"
                         : "bg-white/70 border border-black/10 text-zinc-900 rounded-tl-none shadow-sm"
                     }`}
                   >
                     <p className="whitespace-pre-wrap">{msg.text}</p>
+                    {msg.canRetry && msg.retryPrompt && (
+                      <button
+                        onClick={() => triggerPanelGeneration(msg.retryPrompt!)}
+                        disabled={isBusy}
+                        className="mt-3 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-500/30 hover:bg-amber-500 text-amber-100 hover:text-white font-bold text-xs transition cursor-pointer"
+                      >
+                        <RotateCcw size={12} /> Retry Generation
+                      </button>
+                    )}
                   </div>
 
-                  {/* Multi-Option Candidate Cards */}
+                  {/* Multi-Option Candidate Cards - Priority 1 Item 1, 20 & Priority 4 Item 21 */}
                   {msg.candidates && msg.candidates.length > 0 && (
                     <div className="mt-4 grid grid-cols-1 md:grid-cols-3 gap-3 w-full">
                       {msg.candidates.map((cand) => {
                         const isSelected = msg.selectedCandidateId === cand.id;
+                        const isFallback = cand.source === "development-fallback";
+
                         return (
                           <div
                             key={cand.id}
@@ -962,7 +1210,28 @@ Your story timeline has been updated with these scene beats. You can now generat
                             }`}
                           >
                             <div className="aspect-video relative bg-black">
-                              <img src={cand.image} alt={cand.label} className="w-full h-full object-cover" />
+                              <img
+                                src={cand.image}
+                                alt={`Candidate framing option ${cand.label}`}
+                                className="w-full h-full object-cover"
+                                onError={(e) => {
+                                  e.currentTarget.style.display = "none";
+                                }}
+                              />
+
+                              {/* Honest Source Badge */}
+                              <div className="absolute top-2 left-2 px-2 py-0.5 rounded text-[8px] font-mono font-bold shadow-md">
+                                {isFallback ? (
+                                  <span className="bg-amber-950/85 border border-amber-500/50 text-amber-300 px-1.5 py-0.5 rounded">
+                                    Dev Preview (AI unavailable)
+                                  </span>
+                                ) : (
+                                  <span className="bg-emerald-950/85 border border-emerald-500/50 text-emerald-300 px-1.5 py-0.5 rounded flex items-center gap-1">
+                                    <Sparkles size={8} /> Gemini AI
+                                  </span>
+                                )}
+                              </div>
+
                               {isSelected && (
                                 <div className="absolute top-2 right-2 w-5 h-5 rounded-full bg-purple-500 text-white flex items-center justify-center shadow">
                                   <Check size={12} strokeWidth={3} />
@@ -994,7 +1263,8 @@ Your story timeline has been updated with these scene beats. You can now generat
                                     e.stopPropagation();
                                     handleApprovePanel(cand);
                                   }}
-                                  className={`w-full py-1.5 rounded-lg text-xs font-bold transition cursor-pointer ${
+                                  disabled={isBusy}
+                                  className={`w-full py-1.5 rounded-lg text-xs font-bold transition cursor-pointer disabled:opacity-40 ${
                                     isSelected
                                       ? "bg-purple-600 hover:bg-purple-500 text-white shadow"
                                       : isDark
@@ -1010,7 +1280,8 @@ Your story timeline has been updated with these scene beats. You can now generat
                                     e.stopPropagation();
                                     handleRefineOption(cand);
                                   }}
-                                  className={`w-full py-1 text-[10px] transition ${
+                                  disabled={isBusy}
+                                  className={`w-full py-1 text-[10px] transition disabled:opacity-40 cursor-pointer ${
                                     isDark
                                       ? "text-zinc-400 hover:text-purple-300"
                                       : "text-zinc-600 hover:text-purple-700"
@@ -1038,14 +1309,14 @@ Your story timeline has been updated with these scene beats. You can now generat
                 <div
                   className={`rounded-2xl p-3 text-xs font-mono flex items-center gap-2 border backdrop-blur-md ${
                     isDark
-                      ? "bg-black/50 border-white/15 text-purple-300"
-                      : "bg-white/70 border-black/10 text-purple-700 shadow-sm"
+                      ? "bg-black/40 border-white/10 text-zinc-300"
+                      : "bg-white/60 border-black/10 text-zinc-700 shadow-sm"
                   }`}
                 >
-                  <Loader2 size={14} className="animate-spin" />
-                  {isGeneratingPanel
-                    ? "Vizzy is generating 3 visual panel options..."
-                    : "Vizzy is analyzing your scene..."}
+                  <Loader2 size={13} className="animate-spin text-purple-400" />
+                  {isAiThinking
+                    ? "Vizzy is directing narrative & composition..."
+                    : "Generating candidate visual frames..."}
                 </div>
               </motion.div>
             )}
@@ -1053,49 +1324,70 @@ Your story timeline has been updated with these scene beats. You can now generat
             <div ref={chatBottomRef} />
           </div>
 
-          {/* PROMPT CHIPS & CHAT INPUT BAR (50% Glass Translucency) */}
+          {/* CHAT INPUT AREA */}
           <div
-            className={`p-4 border-t flex flex-col gap-3 transition-colors duration-300 backdrop-blur-md ${
-              isDark
-                ? "border-white/15 bg-black/45"
-                : "border-black/10 bg-white/55"
+            className={`p-4 border-t transition-colors duration-300 backdrop-blur-md ${
+              isDark ? "border-white/15 bg-black/40" : "border-black/10 bg-white/50"
             }`}
           >
-            {/* Clickable prompt suggestions */}
-            <div className="flex gap-2 overflow-x-auto pb-1 no-scrollbar">
-              {promptChips.map((suggestion, i) => (
+            {/* REFINEMENT NOTICE PILL */}
+            {refiningCandidate && (
+              <div className="mb-2 flex items-center justify-between px-3 py-1.5 rounded-lg bg-purple-600/20 border border-purple-500/30 text-xs text-purple-200">
+                <span className="truncate">
+                  ✍️ Refining: <strong>{refiningCandidate.label}</strong>
+                </span>
                 <button
-                  key={i}
-                  onClick={() => handleSendMessage(suggestion)}
-                  className={`shrink-0 px-3 py-1.5 rounded-full border text-[11px] transition cursor-pointer backdrop-blur-sm ${
+                  onClick={() => setRefiningCandidate(null)}
+                  className="text-[10px] font-bold underline cursor-pointer hover:text-white ml-2"
+                >
+                  Cancel Refine
+                </button>
+              </div>
+            )}
+
+            {/* PROMPT SUGGESTION CHIPS */}
+            <div className="flex gap-2 overflow-x-auto pb-2.5 mb-2 no-scrollbar">
+              {promptChips.map((chip) => (
+                <button
+                  key={chip}
+                  onClick={() => handleSendMessage(chip)}
+                  disabled={isBusy}
+                  className={`px-3 py-1.5 rounded-full border text-xs font-medium whitespace-nowrap transition cursor-pointer disabled:opacity-40 ${
                     isDark
-                      ? "bg-black/35 hover:bg-purple-600/30 border-white/15 text-zinc-200 hover:text-white"
-                      : "bg-white/60 hover:bg-purple-100 border-black/10 text-zinc-800 hover:text-purple-900 shadow-sm"
+                      ? "bg-black/30 hover:bg-black/60 border-white/10 hover:border-purple-400/50 text-zinc-300 hover:text-white"
+                      : "bg-white/60 hover:bg-white border-black/10 hover:border-purple-300 text-zinc-700 hover:text-zinc-900 shadow-sm"
                   }`}
                 >
-                  {suggestion}
+                  {chip}
                 </button>
               ))}
             </div>
 
-            {/* Main Input Text Bar */}
+            {/* TEXT INPUT BAR */}
             <div className="relative flex items-center">
               <input
                 type="text"
                 value={inputText}
                 onChange={(e) => setInputText(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && handleSendMessage()}
-                placeholder="Describe your scene, mention a character, or refine an image..."
-                className={`w-full rounded-2xl px-5 py-3.5 pr-14 text-sm focus:outline-none focus:border-purple-500/60 transition backdrop-blur-md ${
+                onKeyDown={(e) => e.key === "Enter" && !e.shiftKey && handleSendMessage()}
+                placeholder={
+                  refiningCandidate
+                    ? "Specify exact refinements for this candidate frame..."
+                    : "Describe what happens in this scene, give directing notes, or ask Vizzy..."
+                }
+                disabled={isBusy}
+                className={`w-full rounded-2xl pl-4 pr-12 py-3.5 text-xs outline-none border transition backdrop-blur-sm disabled:opacity-50 ${
                   isDark
-                    ? "bg-black/45 border border-white/15 text-zinc-100 placeholder:text-zinc-400"
-                    : "bg-white/80 border border-black/15 text-zinc-900 placeholder:text-zinc-500 shadow-inner"
+                    ? "bg-black/40 border-white/15 focus:border-purple-500 text-white placeholder-zinc-500"
+                    : "bg-white/70 border-black/10 focus:border-purple-500 text-zinc-900 placeholder-zinc-400 shadow-sm"
                 }`}
               />
+
               <button
                 onClick={() => handleSendMessage()}
-                disabled={!inputText.trim() || isAiThinking}
-                className="absolute right-2.5 w-10 h-10 rounded-xl bg-purple-600 hover:bg-purple-500 disabled:opacity-40 text-white flex items-center justify-center shadow transition-colors cursor-pointer"
+                disabled={!inputText.trim() || isBusy}
+                className="absolute right-2 w-9 h-9 rounded-xl bg-purple-600 hover:bg-purple-500 disabled:opacity-30 text-white flex items-center justify-center transition shadow cursor-pointer"
+                title="Send message or generate panel"
               >
                 <Send size={16} />
               </button>
@@ -1103,7 +1395,7 @@ Your story timeline has been updated with these scene beats. You can now generat
           </div>
         </main>
 
-        {/* RIGHT SIDEBAR: STORY TIMELINE STRIP (50% Glass Translucency) */}
+        {/* RIGHT SIDEBAR: STORY TIMELINE STRIP */}
         <aside
           className={`hidden lg:flex flex-col border-l p-5 overflow-y-auto select-none justify-between transition-colors duration-300 backdrop-blur-md ${
             isDark
@@ -1140,7 +1432,14 @@ Your story timeline has been updated with these scene beats. You can now generat
                 >
                   <div className="aspect-video relative bg-zinc-900">
                     {panel.image && (
-                      <img src={panel.image} alt={panel.title} className="w-full h-full object-cover" />
+                      <img
+                        src={panel.image}
+                        alt={`Generated artwork for ${panel.title}`}
+                        className="w-full h-full object-cover"
+                        onError={(e) => {
+                          e.currentTarget.style.display = "none";
+                        }}
+                      />
                     )}
                     <div className="absolute top-1.5 left-1.5 px-1.5 py-0.5 rounded bg-black/75 text-[8px] font-mono font-bold text-white border border-white/10">
                       0{idx + 1}
@@ -1192,7 +1491,7 @@ Your story timeline has been updated with these scene beats. You can now generat
                     </p>
                     {panel.dialogue && (
                       <p className="text-[10px] text-purple-600 dark:text-purple-300 italic mt-0.5 line-clamp-1">
-                        💬 "{panel.dialogue}"
+                        💬 &ldquo;{panel.dialogue}&rdquo;
                       </p>
                     )}
                     <p className="text-[9px] text-zinc-400 dark:text-zinc-400 mt-0.5 line-clamp-1">{panel.caption}</p>
@@ -1208,14 +1507,15 @@ Your story timeline has been updated with these scene beats. You can now generat
               className={`w-full py-2.5 rounded-xl border text-xs font-bold flex items-center justify-center gap-2 cursor-pointer transition backdrop-blur-sm ${
                 isDark
                   ? "border-white/15 bg-black/40 hover:bg-black/60 text-white"
-                  : "border-black/10 bg-white/70 hover:bg-white text-zinc-800 shadow-sm"
+                  : "border-black/10 bg-white/70 hover:bg-white text-zinc-900 shadow-sm"
               }`}
             >
-              <BookOpen size={14} /> View Graphic Novel Spread
+              <BookOpen size={14} /> Printable Page Spread
             </button>
+
             <button
               onClick={() => setShowSlideshow(true)}
-              className="w-full py-3 rounded-xl bg-purple-600 hover:bg-purple-500 text-white font-bold text-xs shadow-lg flex items-center justify-center gap-2 cursor-pointer transition"
+              className="w-full py-2.5 rounded-xl bg-gradient-to-r from-purple-600 to-fuchsia-600 hover:from-purple-500 hover:to-fuchsia-500 text-white font-bold text-xs shadow-lg shadow-purple-950/40 flex items-center justify-center gap-2 cursor-pointer transition"
             >
               <Play size={14} fill="currentColor" /> Launch Auto-Running Loop
             </button>
@@ -1253,26 +1553,15 @@ Your story timeline has been updated with these scene beats. You can now generat
       {editingPanel && (
         <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
           <div
-            className={`rounded-2xl p-6 max-w-md w-full shadow-2xl flex flex-col gap-4 border ${
-              isDark
-                ? "bg-[#100e1a] border-white/10 text-white"
-                : "bg-white border-zinc-300 text-zinc-900"
+            className={`max-w-md w-full rounded-2xl p-6 border shadow-2xl flex flex-col gap-4 ${
+              isDark ? "bg-[#100e1a] border-white/15 text-white" : "bg-white border-zinc-200 text-zinc-900"
             }`}
           >
-            <div
-              className={`flex items-center justify-between border-b pb-3 ${
-                isDark ? "border-white/10" : "border-zinc-200"
-              }`}
-            >
-              <h3 className="text-sm font-bold">Edit Panel Text</h3>
-              <button onClick={() => setEditingPanel(null)} className="text-zinc-400 hover:text-white cursor-pointer">
-                <X size={16} />
-              </button>
-            </div>
+            <h3 className="text-sm font-bold">Edit Panel Dialogue & Caption</h3>
 
             <div>
               <label className="text-[10px] font-bold text-purple-600 dark:text-purple-300 uppercase block mb-1">
-                Title
+                Panel Title
               </label>
               <input
                 type="text"
@@ -1358,6 +1647,12 @@ function generateInitialSvg(title: string, prompt: string, variant: number): str
       <rect width="1600" height="900" fill="url(#sky_init_${variant})" />
       <rect y="550" width="1600" height="350" fill="#030307" />
       <circle cx="800" cy="500" r="30" fill="#0c0a18" />
+      
+      <rect x="60" y="60" width="460" height="36" rx="8" fill="#000000" fill-opacity="0.8" stroke="#a78bfa" stroke-width="1.5" />
+      <text x="80" y="83" fill="#c4b5fd" font-family="sans-serif" font-size="13" font-weight="bold">
+        DEVELOPMENT PREVIEW • STARTER TEMPLATE
+      </text>
+
       <text x="80" y="780" fill="#ffffff" font-family="sans-serif" font-size="38" font-weight="bold">${title}</text>
       <text x="80" y="830" fill="#a78bfa" font-family="sans-serif" font-size="18">${prompt}</text>
     </svg>

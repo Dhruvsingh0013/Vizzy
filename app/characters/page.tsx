@@ -56,16 +56,24 @@ export default function CharactersPage() {
   const [error, setError] = useState("");
 
   useEffect(() => {
-    const savedProject = sessionStorage.getItem("vizzy-project");
-    const savedCharacters = sessionStorage.getItem("vizzy-characters");
+    const timer = setTimeout(() => {
+      try {
+        const savedProject = sessionStorage.getItem("vizzy-project");
+        const savedCharacters = sessionStorage.getItem("vizzy-characters");
 
-    if (savedProject) {
-      setProject(JSON.parse(savedProject));
-    }
+        if (savedProject) {
+          setProject(JSON.parse(savedProject));
+        }
 
-    if (savedCharacters) {
-      setCharacters(JSON.parse(savedCharacters));
-    }
+        if (savedCharacters) {
+          setCharacters(JSON.parse(savedCharacters));
+        }
+      } catch (e) {
+        console.warn("Could not load from sessionStorage:", e);
+      }
+    }, 0);
+
+    return () => clearTimeout(timer);
   }, []);
 
   const saveCharacters = (updated: Character[]) => {
@@ -272,8 +280,7 @@ export default function CharactersPage() {
           </h1>
 
           <p className="mt-7 text-white/45 text-base md:text-lg max-w-2xl leading-relaxed">
-            Create the characters who will inhabit your world. Their visual
-            references can later be used when generating scenes.
+            Create the characters who will inhabit your world. Character reference descriptions are incorporated into scene prompts to encourage visual consistency across your story panels.
           </p>
 
           {project && (
@@ -320,7 +327,10 @@ export default function CharactersPage() {
                       {character.image ? (
                         <img
                           src={character.image}
-                          alt={character.name}
+                          alt={`Portrait of ${character.name} (${character.role})`}
+                          onError={(e) => {
+                            e.currentTarget.style.display = "none";
+                          }}
                           className="w-full h-full object-cover"
                         />
                       ) : (

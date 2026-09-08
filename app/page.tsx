@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useRef } from "react";
+import React, { useEffect, useRef } from "react";
 import { motion } from "framer-motion";
 import Link from "next/link";
 import {
@@ -23,7 +23,7 @@ function PointerParticleTrail() {
     if (!ctx) return;
 
     let animationFrameId: number;
-    let particles: Array<{
+    const particles: Array<{
       x: number;
       y: number;
       vx: number;
@@ -274,11 +274,11 @@ export default function Home() {
                 Establish Cast & Visual Style
               </h3>
               <p className="text-sm text-zinc-600 leading-relaxed">
-                Choose color palettes (e.g. Muted Wartime Olive, Cyberpunk Neon, Film Noir) and create character portraits in the Cast Creator so your protagonists remain visually consistent across every frame.
+                Choose visual themes (e.g. Muted Wartime Olive, Cyberpunk Neon, Film Noir) and create character portraits. Character reference descriptions are incorporated into scene prompts to encourage visual consistency across frames.
               </p>
             </div>
             <div className="mt-6 pt-6 border-t border-black/5 flex items-center justify-between text-xs font-bold text-purple-800">
-              <span>Character Consistency & Palettes</span>
+              <span>Character References & Palettes</span>
               <Check size={16} className="text-emerald-600" />
             </div>
           </div>

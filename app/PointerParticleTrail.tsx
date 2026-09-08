@@ -12,7 +12,7 @@ export default function PointerParticleTrail() {
     if (!ctx) return;
 
     let animationFrameId: number;
-    let particles: Array<{
+    const particles: Array<{
       x: number;
       y: number;
       vx: number;
