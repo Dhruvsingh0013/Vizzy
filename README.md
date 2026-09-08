@@ -1,36 +1,72 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Vizzy 🎬🎨
+### AI Collaborative Graphic Novel & Storyboard Creator
 
-## Getting Started
+Vizzy is an interactive visual book and cinematic storyboard creation suite powered by Google Gemini. Transform raw screenplays, scene treatments, and director notes into living graphic novels, multi-panel spreads, and auto-running slideshow loops.
 
-First, run the development server:
+---
 
+## ✨ Features
+
+- **Collaborative AI Director**: Converse with Vizzy in real-time to analyze scene beats, dial in atmospheric lighting, and direct camera angles.
+- **Visual Character Development**: Build your story's cast with Gemini portrait generation, ensuring persistent facial features and costume continuity across panels.
+- **Three-Framing Candidate Engine**: For each scene beat, Vizzy generates 3 distinct visual framing options (Wide Shot, Dynamic Action, Close-up / Intimate) to select or refine directly in chat.
+- **Dynamic Studio Environments**: Immersive, translucent glassmorphic interface with 5 rotating animated background environments (Ocean Escape, 1980s London, Neo City, Winter Forest, Future Worlds).
+- **Light & Dark Mode**: Toggle between high-contrast dark studio mode and manga paper light mode with one click.
+- **Screenplay & Script Parser**: Paste raw screenplays or outline notes to auto-split scenes into sequential story panels.
+- **Dual Presentation & Export Formats**:
+  - **Auto-Running Slideshow Loop**: Cinematic playback with Web Audio transition sound effects, Ken Burns pan-and-zoom, dialogue speech bubbles, and speed controls.
+  - **Graphic Novel Page Spread**: Multi-panel print-ready layout with "Print / Save as PDF" support.
+
+---
+
+## 🚀 Quick Start
+
+### 1. Clone the repository
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+git clone <your-repo-url>
+cd vizzy
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+### 2. Install dependencies
+```bash
+npm install
+```
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+### 3. Configure Gemini API Key
+Create a `.env.local` file in the project root:
+```bash
+cp .env.example .env.local
+```
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+Open `.env.local` and insert your Gemini API Key:
+```env
+GEMINI_API_KEY=your_actual_gemini_api_key_here
+```
+> Get a free API key at [Google AI Studio](https://aistudio.google.com/).
 
-## Learn More
+### 4. Run the development server
+```bash
+npm run dev
+```
 
-To learn more about Next.js, take a look at the following resources:
+Open [http://localhost:3000](http://localhost:3000) in your browser.
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+### 5. Build for production
+```bash
+npm run build
+npm run start
+```
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+---
 
-## Deploy on Vercel
+## 📁 Application Architecture
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+- `/` — Landing page with introductory guide to the script-to-visuals process.
+- `/characters` — Cast creator with Gemini reference portrait generation.
+- `/studio` — Collaborative workspace with chat director, script importer, timeline editor, slideshow loop player, and graphic novel page spread.
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+---
+
+## 🔒 Security Note
+
+Your `.env.local` containing `GEMINI_API_KEY` is listed in `.gitignore` and is **never** committed or pushed to remote repositories.
